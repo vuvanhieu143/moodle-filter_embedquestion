@@ -154,13 +154,12 @@ class text_filter extends \moodle_text_filter {
         }
 
         $questioninfo = array_shift($parts);
-        $token = array_pop($parts);
 
+        $token = array_pop($parts);
         $embedid = embed_id::create_from_string($questioninfo);
         if ($embedid === null) {
             return [null, null];
         }
-
         if (!token::is_authorized_secret_token($token, $embedid)) {
             return [null, null];
         }
