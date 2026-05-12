@@ -85,7 +85,11 @@ try {
     utils::report_if_error($attempt, $context);
 } catch (Exception $e) {
     // They have already seen the error once (see below), and clicked the restart button.
-    if (optional_param('forcerestart', false, PARAM_BOOL)) {
+    // Or it is an attempt has been deleted and replaced with description question.
+    if (
+        optional_param('forcerestart', false, PARAM_BOOL) ||
+        $e->getMessage() === 'filter_embedquestion/attemptsdeleted'
+    ) {
         $attempt->discard_broken_attempt();
         redirect($PAGE->url);
     } else {
@@ -108,14 +112,10 @@ try {
     }
 }
 
-// If the user can edit questions, and the question has been edited since their attempt
-// started, start a new attempt.
-if ($attempt->should_switch_to_new_version()) {
-    $attempt->discard_broken_attempt();
-    redirect($PAGE->url);
-}
-
 // Process any actions from the buttons at the bottom of the form.
+// This must happen before handle_version_change(), so that if a student clicks
+// "Check" at the same time as a new version is saved, their answer is saved first.
+// The version change is then handled on the subsequent GET after the redirect.
 if (data_submitted() && confirm_sesskey()) {
     try {
         if (optional_param('restart', false, PARAM_BOOL)) {
@@ -158,6 +158,13 @@ if (data_submitted() && confirm_sesskey()) {
             $debuginfo
         );
     }
+}
+
+// If the question has been updated since this attempt started, handle the version change.
+$versionaction = $attempt->handle_version_change();
+if ($versionaction === attempt::VERSION_RESTART) {
+    $attempt->discard_broken_attempt();
+    redirect($PAGE->url);
 }
 
 // Log the view.

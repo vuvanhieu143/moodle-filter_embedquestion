@@ -332,27 +332,29 @@ class utils {
     }
 
     /**
-     * Is a particular question the latest version of that question bank entry.
+     * Get the latest ready version info for a question bank entry.
      *
-     * This method can only be called if you have already verified that
-     * {@see has_question_versionning()} returns true.
+     * Returns an object with fields 'version' and 'questionid' for the latest
+     * ready version of the same question bank entry as $question, or null if none.
      *
      * @param \question_definition $question the question.
-     * @return bool is this the latest ready version of this question?
+     * @return \stdClass|null object with 'version' and 'questionid', or null.
      */
-    public static function is_latest_version(\question_definition $question): bool {
+    public static function get_latest_version(\question_definition $question): ?\stdClass {
         global $DB;
 
-        $latestversion = $DB->get_field(
-            'question_versions',
-            'MAX(version)',
+        return $DB->get_record_sql(
+            "SELECT latest.version, latest.questionid
+               FROM {question_versions} latest
+               JOIN {question_versions} current ON current.questionbankentryid = latest.questionbankentryid
+              WHERE current.questionid = :questionid AND latest.status = :ready
+           ORDER BY latest.version DESC",
             [
-                'questionbankentryid' => $question->questionbankentryid,
-                'status' => question_version_status::QUESTION_STATUS_READY,
-            ]
-        );
-
-        return $question->version == $latestversion;
+                'questionid' => $question->id,
+                'ready'      => question_version_status::QUESTION_STATUS_READY,
+            ],
+            IGNORE_MULTIPLE
+        ) ?: null;
     }
 
     /**
