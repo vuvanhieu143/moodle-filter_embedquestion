@@ -24,6 +24,18 @@ namespace filter_embedquestion;
  * @license   http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class attempt {
+    /** @var string {@see handle_version_change()}: already the latest version. */
+    public const VERSION_OK = 'ok';
+
+    /** @var string {@see handle_version_change()}: attempt regraded to new version in place. */
+    public const VERSION_UPDATED = 'updated';
+
+    /** @var string {@see handle_version_change()}: regrade not possible, user has edit cap — caller must restart. */
+    public const VERSION_RESTART = 'restart';
+
+    /** @var string {@see handle_version_change()}: regrade not possible, no edit cap — message shown to user. */
+    public const VERSION_SHOW_MESSAGE = 'showmessage';
+
     /**
      * @var embed_id identity of the question(s) being embedded in this place.
      */
@@ -63,6 +75,12 @@ class attempt {
      * @var int $slot slot number, within $quba, which is the current attempt.
      */
     protected $slot;
+
+    /**
+     * @var bool true if the question version changed but could not be regraded, and the user
+     * does not have edit capability — a message and restart button should be shown.
+     */
+    protected bool $showversionchangedmessage = false;
 
     /**
      * @var string if something has gone wrong, a lang string for a description of the problem.
@@ -230,6 +248,24 @@ class attempt {
         $this->quba = $quba;
         $this->slot = $slot;
         $question = $this->quba->get_question($this->slot);
+        if ($question->qtype->name() === 'description' && $slot > 0) {
+            $deletedattempts = 0;
+            foreach ($quba->get_attempt_iterator() as $currentattempt) {
+                $currentquestion = $quba->get_question($currentattempt->get_slot());
+                if ($currentquestion->get_type_name() === 'description') {
+                    $deletedattempts++;
+                }
+            }
+            if ($deletedattempts == $quba->question_count()) {
+                // All questions in this usage are deleted questions, so delete the whole usage.
+                attempt_storage::instance()->delete_attempt($quba);
+                throw new \moodle_exception('attemptsdeleted', 'filter_embedquestion');
+            } else if ($slot > $deletedattempts) {
+                // We will skip the deleted attempt questions and get the previous attempt.
+                $this->slot = $slot - $deletedattempts;
+                $question = $this->quba->get_question($this->slot);
+            }
+        }
         if ($this->embedid->questionidnumber === '*') {
             if (empty($question->idnumber)) {
                 throw new \moodle_exception('questionnolongerhasidnumber', 'filter_embedquestion');
@@ -337,7 +373,9 @@ class attempt {
         // Count how many times each one has been used. We build an array qustionid => count of times used.
         $timesused = array_fill_keys(array_keys($questionids), 0);
         foreach ($this->quba->get_attempt_iterator() as $qa) {
-            $timesused[$qa->get_question()->id] += 1;
+            if (isset($timesused[$qa->get_question()->id])) {
+                $timesused[$qa->get_question()->id] += 1;
+            }
         }
 
         // How many times have the least-used questions been used?
@@ -526,6 +564,20 @@ class attempt {
         }
         // Start the question form.
         $output = '';
+        // If the question version changed but could not be regraded, show a message with restart button.
+        if ($this->showversionchangedmessage) {
+            $output .= \html_writer::div(
+                get_string('questionhaschanged', 'filter_embedquestion') . ' ' .
+                \html_writer::tag('button', get_string('restartwithnewversion', 'filter_embedquestion'), [
+                    'type'  => 'submit',
+                    'name'  => 'restart',
+                    'value' => '1',
+                    'class' => 'btn btn-secondary ms-2',
+                    'form'  => 'responseform',
+                ]),
+                'alert alert-warning'
+            );
+        }
         $output .= \html_writer::start_tag('form', [
             'method' => 'post',
             'action' => $this->get_action_url(),
@@ -572,22 +624,72 @@ class attempt {
     }
 
     /**
-     * Should the current attempt be re-started?
+     * Handle any version change for the current question attempt.
      *
-     * @return bool true if it should.
+     * If the question in the current attempt is not the latest ready version,
+     * this method tries to regrade the attempt in place (Path 1). If the regrade
+     * is not possible, it falls through to Path 2/3 depending on edit capability.
+     *
+     * Returns one of the VERSION_* constants.
      */
-    public function should_switch_to_new_version(): bool {
-        if (!utils::has_question_versionning()) {
-            // Auto-restart is only relevant in Moodle 4.0+.
-            return false;
-        }
+    public function handle_version_change(): string {
+        global $DB;
         $question = $this->current_question();
-        if (!question_has_capability_on($question, 'edit')) {
-            // Only auto-restart for users who can edit the question.
-            return false;
+        $latestinfo = utils::get_latest_version($question);
+
+        if (!$latestinfo || $question->id == $latestinfo->questionid) {
+            return self::VERSION_OK;
         }
-        // Need to auto-restart if this is not the latest version.
-        return !utils::is_latest_version($question);
+
+        // Question is not the latest version. Check if we already tried and
+        // failed to regrade with this version (cached in attempt metadata).
+        $checkedversion = $this->quba->get_question_attempt_metadata(
+            $this->slot,
+            'regrade_check_with_new_version'
+        );
+
+        if ($checkedversion === null || (int)$checkedversion < (int)$latestinfo->version) {
+            // Not cached, or a newer version has appeared. Try to regrade.
+            $newquestion = \question_bank::load_question($latestinfo->questionid);
+            $cannotregrade = $this->quba->validate_can_regrade_with_other_version(
+                $this->slot,
+                $newquestion
+            );
+
+            if ($cannotregrade === null) {
+                // Compatible — regrade the attempt in place.
+                $this->quba->regrade_question(
+                    $this->slot,
+                    $this->is_question_finished(),
+                    null,
+                    $newquestion
+                );
+            } else {
+                // Not compatible — cache this so we don't retry until a newer version appears.
+                $this->quba->set_question_attempt_metadata(
+                    $this->slot,
+                    'regrade_check_with_new_version',
+                    (string)$latestinfo->version
+                );
+            }
+
+            // Save the updated usage (either regraded or with new metadata).
+            $transaction = $DB->start_delegated_transaction();
+            \question_engine::save_questions_usage_by_activity($this->quba);
+            $transaction->allow_commit();
+
+            if ($cannotregrade === null) {
+                return self::VERSION_UPDATED;
+            }
+        }
+
+        // Regrade not possible. Users with edit capability get auto-restarted by the caller;
+        // everyone else sees a message with a manual restart button.
+        if (question_has_capability_on((int)$latestinfo->questionid, 'edit')) {
+            return self::VERSION_RESTART;
+        }
+        $this->showversionchangedmessage = true;
+        return self::VERSION_SHOW_MESSAGE;
     }
 
     /**

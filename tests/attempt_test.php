@@ -321,6 +321,178 @@ final class attempt_test extends \advanced_testcase {
         $this->assertMatchesRegularExpression($expectedregex, $html);
     }
 
+    public function test_handle_version_change_no_change(): void {
+        global $USER;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \filter_embedquestion_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('filter_embedquestion');
+        $q = $generator->create_embeddable_question('truefalse');
+        $attempt = $generator->create_attempt_at_embedded_question($q, $USER, '', null, '', 1, false);
+        $attempt->continue_current_attempt($attempt->get_question_usage()->get_id(), $attempt->get_slot());
+
+        // No version change — should return VERSION_OK.
+        $this->assertEquals(attempt::VERSION_OK, $attempt->handle_version_change());
+    }
+
+    public function test_handle_version_change_compatible_regrade(): void {
+        global $USER;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \filter_embedquestion_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('filter_embedquestion');
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $q = $generator->create_embeddable_question('truefalse');
+        $attempt = $generator->create_attempt_at_embedded_question($q, $USER, '', null, '', 1, false);
+        $attempt->continue_current_attempt($attempt->get_question_usage()->get_id(), $attempt->get_slot());
+
+        // Get the question id before the version change.
+        $oldquestionid = $attempt->get_question_usage()->get_question($attempt->get_slot())->id;
+
+        // Create a compatible new version (just change the question text).
+        $questiongenerator->update_question($q, null, ['questiontext' => 'Updated question text.']);
+
+        // Should regrade in place and return VERSION_UPDATED.
+        $this->assertEquals(attempt::VERSION_UPDATED, $attempt->handle_version_change());
+
+        // Verify the question in the attempt has been updated to the new version.
+        $newquestionid = $attempt->get_question_usage()->get_question($attempt->get_slot())->id;
+        $this->assertNotEquals($oldquestionid, $newquestionid);
+    }
+
+    public function test_handle_version_change_incompatible_with_edit_cap(): void {
+        global $USER;
+        $this->resetAfterTest();
+        $this->setAdminUser();
+
+        /** @var \filter_embedquestion_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('filter_embedquestion');
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $q = $generator->create_embeddable_question('truefalse');
+        $attempt = $generator->create_attempt_at_embedded_question($q, $USER, '', null, '', 1, false);
+        $attempt->continue_current_attempt($attempt->get_question_usage()->get_id(), $attempt->get_slot());
+
+        // Create an incompatible new version by inserting a question of a different type
+        // as a new version of the same question bank entry.
+        $this->create_incompatible_version($q, $questiongenerator);
+
+        // Admin has edit capability — should return VERSION_RESTART.
+        $this->assertEquals(attempt::VERSION_RESTART, $attempt->handle_version_change());
+    }
+
+    public function test_handle_version_change_incompatible_without_edit_cap(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        // Create a student without edit capability.
+        $course = $this->getDataGenerator()->create_course();
+        $student = $this->getDataGenerator()->create_user();
+        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
+        $this->getDataGenerator()->enrol_user($student->id, $course->id, $studentrole->id);
+        $this->setUser($student);
+
+        /** @var \filter_embedquestion_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('filter_embedquestion');
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $q = $generator->create_embeddable_question('truefalse');
+        $attempt = $generator->create_attempt_at_embedded_question($q, $student, '', null, '', 1, false);
+        $attempt->continue_current_attempt($attempt->get_question_usage()->get_id(), $attempt->get_slot());
+
+        // Create an incompatible new version (different qtype).
+        $this->create_incompatible_version($q, $questiongenerator);
+
+        // Student has no edit capability — should return VERSION_SHOW_MESSAGE.
+        $this->assertEquals(attempt::VERSION_SHOW_MESSAGE, $attempt->handle_version_change());
+    }
+
+    public function test_handle_version_change_metadata_caching(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        // Create a student.
+        $course = $this->getDataGenerator()->create_course();
+        $student = $this->getDataGenerator()->create_user();
+        $studentrole = $DB->get_record('role', ['shortname' => 'student']);
+        $this->getDataGenerator()->enrol_user($student->id, $course->id, $studentrole->id);
+        $this->setUser($student);
+
+        /** @var \filter_embedquestion_generator $generator */
+        $generator = $this->getDataGenerator()->get_plugin_generator('filter_embedquestion');
+        $questiongenerator = $this->getDataGenerator()->get_plugin_generator('core_question');
+        $q = $generator->create_embeddable_question('truefalse');
+        $attempt = $generator->create_attempt_at_embedded_question($q, $student, '', null, '', 1, false);
+        $attempt->continue_current_attempt($attempt->get_question_usage()->get_id(), $attempt->get_slot());
+
+        // Create an incompatible new version.
+        $newversion = $this->create_incompatible_version($q, $questiongenerator);
+
+        // First call — should check regrade and cache the failed version.
+        $result = $attempt->handle_version_change();
+        $this->assertEquals(attempt::VERSION_SHOW_MESSAGE, $result);
+
+        // Verify metadata was set.
+        $cachedversion = $attempt->get_question_usage()->get_question_attempt_metadata(
+            $attempt->get_slot(),
+            'regrade_check_with_new_version'
+        );
+        $this->assertEquals((string) $newversion, $cachedversion);
+
+        // Second call with same version — should skip regrade check (metadata cached).
+        // Still returns VERSION_SHOW_MESSAGE but without doing the expensive regrade check again.
+        $result = $attempt->handle_version_change();
+        $this->assertEquals(attempt::VERSION_SHOW_MESSAGE, $result);
+
+        // Now create a v3 (compatible this time) — metadata should be re-evaluated.
+        $questiongenerator->update_question($q, null, ['questiontext' => 'Third version text.']);
+
+        // The new version is higher than the cached one, so regrade should be attempted.
+        // Since truefalse v3 is compatible with truefalse v1, this should succeed.
+        $result = $attempt->handle_version_change();
+        $this->assertEquals(attempt::VERSION_UPDATED, $result);
+    }
+
+    /**
+     * Helper: create an incompatible new version of a question by inserting
+     * an essay question into the same bank entry as a higher version.
+     *
+     * @param \stdClass $q the original question.
+     * @param \core_question_generator $questiongenerator the question generator.
+     * @return int the version number of the newly inserted incompatible version.
+     */
+    protected function create_incompatible_version(
+        \stdClass $q,
+        \core_question_generator $questiongenerator
+    ): int {
+        global $DB;
+        $category = $DB->get_record('question_categories', ['id' => $q->category], '*', MUST_EXIST);
+        $essay = $questiongenerator->create_question('essay', null, ['category' => $category->id]);
+
+        $qbeid = $DB->get_field('question_versions', 'questionbankentryid', ['questionid' => $q->id]);
+        $currentmaxversion = $DB->get_field_sql(
+            'SELECT MAX(version) FROM {question_versions} WHERE questionbankentryid = ?',
+            [$qbeid]
+        );
+        // Remove the essay's own bank entry and version.
+        $essayqbeid = $DB->get_field('question_versions', 'questionbankentryid', ['questionid' => $essay->id]);
+        $DB->delete_records('question_versions', ['questionid' => $essay->id]);
+        $DB->delete_records('question_bank_entries', ['id' => $essayqbeid]);
+        // Insert essay as a new version of the original bank entry.
+        $newversion = $currentmaxversion + 1;
+        $DB->insert_record('question_versions', [
+            'questionbankentryid' => $qbeid,
+            'questionid' => $essay->id,
+            'version' => $newversion,
+            'status' => 'ready',
+        ]);
+        // Update the nextversion counter so future update_question calls get correct version numbers.
+        $DB->set_field('question_bank_entries', 'nextversion', $newversion + 1, ['id' => $qbeid]);
+        \question_bank::notify_question_edited($q->id);
+
+        return $newversion;
+    }
+
     /**
      * Helper: throw an exception if attempt is not valid.
      *

@@ -69,7 +69,6 @@ class renderer extends \plugin_renderer_base {
         question_options $options,
         string $displaynumber
     ): string {
-        $this->page->requires->js_module('core_question_engine');
         $output = $quba->render_question($slot, $options, $displaynumber);
         if ($options->showquestionbank) {
             $output = $this->add_questionbank_link($quba, $slot, $output);

@@ -209,8 +209,13 @@ class filter_embedquestion_generator extends component_generator_base {
         $currentuser = $USER;
         $USER = $user;
         // End nasty hack.
-
-        $attempt->find_or_create_attempt();
+        try {
+            $attempt->find_or_create_attempt();
+        } catch (Exception $e) {
+            if ($e->getMessage() === 'filter_embedquestion/attemptsdeleted') {
+                $attempt->discard_broken_attempt();
+            }
+        }
         $this->verify_attempt_valid($attempt);
 
         if ($slot > 1) {

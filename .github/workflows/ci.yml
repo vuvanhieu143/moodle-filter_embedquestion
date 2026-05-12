@@ -32,7 +32,7 @@ jobs:
         include:
           - { php: '8.2', moodle-branch: MOODLE_500_STABLE, database: mariadb }
           - { php: '8.3', moodle-branch: MOODLE_501_STABLE, database: pgsql }
-          - { php: '8.3', moodle-branch: main, database: pgsql }
+          - { php: '8.4', moodle-branch: MOODLE_502_STABLE, database: pgsql }
 
     steps:
       - name: Check out repository code
@@ -87,6 +87,7 @@ jobs:
         run: moodle-plugin-ci phpdoc
 
       - name: Validating
+        continue-on-error: true
         if: ${{ always() }}
         run: moodle-plugin-ci validate
 

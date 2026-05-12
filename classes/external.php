@@ -58,15 +58,6 @@ class external extends \external_api {
     }
 
     /**
-     * Confirms that the get_status function is allowed from AJAX.
-     *
-     * @return bool True
-     */
-    public static function get_sharable_question_choices_is_allowed_from_ajax(): bool {
-        return true;
-    }
-
-    /**
      * Get the list of sharable questions in a category.
      *
      * @param int $cmid the course module id.
@@ -188,15 +179,6 @@ class external extends \external_api {
             PARAM_RAW,
             'Embed code to show this question with those options.'
         );
-    }
-
-    /**
-     * Confirms that the get_embed_code function is allowed from AJAX.
-     *
-     * @return bool True
-     */
-    public static function get_embed_code_is_allowed_from_ajax(): bool {
-        return true;
     }
 
     /**

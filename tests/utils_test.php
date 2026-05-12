@@ -324,17 +324,19 @@ final class utils_test extends \advanced_testcase {
             ]
         );
 
-        // Now create a random question in that category.
-        $form = new \stdClass();
-        $form->category = $category->id . ',' . $category->contextid;
-        $form->includesubcategories = false;
-        $form->questiontext = ['text' => '0', 'format' => 0]; // Needed for the test to pass in Moodle 3.4.
-        $form->defaultmark = 1;
-        $form->hidden = 1;
-        $form->stamp = make_unique_id_code(); // Set the unique code (not to be changed).
-        $question = new \stdClass();
-        $question->qtype = 'random';
-        \question_bank::get_qtype('random')->save_question($question, $form);
+        if (\question_bank::is_qtype_usable('random')) {
+            // Now create a random question in that category.
+            $form = new \stdClass();
+            $form->category = $category->id . ',' . $category->contextid;
+            $form->includesubcategories = false;
+            $form->questiontext = ['text' => '0', 'format' => 0]; // Needed for the test to pass in Moodle 3.4.
+            $form->defaultmark = 1;
+            $form->hidden = 1;
+            $form->stamp = make_unique_id_code(); // Set the unique code (not to be changed).
+            $question = new \stdClass();
+            $question->qtype = 'random';
+            \question_bank::get_qtype('random')->save_question($question, $form);
+        }
 
         // The random question should not appear in the list.
         $this->assertEquals(
@@ -367,17 +369,19 @@ final class utils_test extends \advanced_testcase {
         );
         $questiongenerator->create_question_category();
 
-        // Now create a random question in that category.
-        $form = new \stdClass();
-        $form->category = $catwithid2->id . ',' . $catwithid2->contextid;
-        $form->includesubcategories = false;
-        $form->questiontext = ['text' => '0', 'format' => 0]; // Needed for the test to pass in Moodle 3.4.
-        $form->defaultmark = 1;
-        $form->hidden = 1;
-        $form->stamp = make_unique_id_code(); // Set the unique code (not to be changed).
-        $question = new \stdClass();
-        $question->qtype = 'random';
-        \question_bank::get_qtype('random')->save_question($question, $form);
+        if (\question_bank::is_qtype_usable('random')) {
+            // Now create a random question in that category.
+            $form = new \stdClass();
+            $form->category = $catwithid2->id . ',' . $catwithid2->contextid;
+            $form->includesubcategories = false;
+            $form->questiontext = ['text' => '0', 'format' => 0]; // Needed for the test to pass in Moodle 3.4.
+            $form->defaultmark = 1;
+            $form->hidden = 1;
+            $form->stamp = make_unique_id_code(); // Set the unique code (not to be changed).
+            $question = new \stdClass();
+            $question->qtype = 'random';
+            \question_bank::get_qtype('random')->save_question($question, $form);
+        }
 
         $questiongenerator->create_question(
             'shortanswer',

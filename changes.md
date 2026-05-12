@@ -1,5 +1,11 @@
 # Change log for the embed questions filter
 
+## Changes in 2.5
+* This version works with Moodle 5.2+.
+* Allow question attempt-level deletion
+* Student and AL attempts of an older question version are saved and restarted (with the latest) question version when a new version of that question is saved.
+
+
 ## Changes in 2.4.2
 * Fix show wrong warning message when we can't find the question by idnumber.
 * Fix issue where the switch question bank button is missing.
